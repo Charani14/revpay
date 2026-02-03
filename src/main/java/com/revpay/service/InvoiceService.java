@@ -1,64 +1,118 @@
 package com.revpay.service;
 
 import com.revpay.entity.Invoice;
-import com.revpay.entity.Transaction;
 import com.revpay.entity.User;
-import com.revpay.entity.enums.AccountType;
 import com.revpay.entity.enums.InvoiceStatus;
 import com.revpay.repository.InvoiceRepository;
-import com.revpay.repository.TransactionRepository;
-import com.revpay.repository.UserRepository;
+import jakarta.transaction.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 
+/**
+ * Service class to handle Invoice operations.
+ *
+ * @since 1.0
+ */
 @Service
 public class InvoiceService {
 
-    private final InvoiceRepository invoiceRepository;
-    private final TransactionRepository transactionRepository;
-    private final UserRepository userRepository;
-
-    public InvoiceService(InvoiceRepository invoiceRepository,
-                          TransactionRepository transactionRepository,
-                          UserRepository userRepository) {
-        this.invoiceRepository = invoiceRepository;
-        this.transactionRepository = transactionRepository;
-        this.userRepository = userRepository;
-    }
+    @Autowired
+    private InvoiceRepository invoiceRepository;
 
     /**
-     * Create an invoice linked to a transaction.
-     * This method fetches transaction, business user and fills mandatory invoice fields.
+     * Creates a new invoice for a business user.
+     *
+     * @param businessUser    The business user creating the invoice
+     * @param customerInfo    Customer details
+     * @param itemizedDetails Details of items and pricing
+     * @param paymentTerms    Payment terms (e.g., Net 30)
+     * @param totalAmount     Total invoice amount
+     * @return The saved Invoice entity
+     * @since 1.0
      */
-    public Invoice createInvoice(Long transactionId) {
-
-        Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new RuntimeException("Transaction with ID " + transactionId + " not found"));
-
-        User businessUser = null;
-
-        if (transaction.getSender() != null && transaction.getSender().getAccountType() == AccountType.BUSINESS) {
-            businessUser = transaction.getSender();
-        } else if (transaction.getReceiver() != null && transaction.getReceiver().getAccountType() == AccountType.BUSINESS) {
-            businessUser = transaction.getReceiver();
-        } else {
-            throw new RuntimeException("No business user found in this transaction");
-        }
+    public Invoice createInvoice(User businessUser, String customerInfo, String itemizedDetails,
+                                 String paymentTerms, Double totalAmount) {
 
         Invoice invoice = new Invoice();
         invoice.setBusinessUser(businessUser);
-
-        // Setting default or placeholder values
-        invoice.setCustomerInfo("Default Customer Info");
-        invoice.setItemizedDetails("Default Itemized Details");
-        invoice.setPaymentTerms("Net 30 days");
-        invoice.setTotalAmount(transaction.getAmount());  // Use transaction amount as invoice total
-
+        invoice.setCustomerInfo(customerInfo);
+        invoice.setItemizedDetails(itemizedDetails);
+        invoice.setPaymentTerms(paymentTerms);
+        invoice.setTotalAmount(totalAmount);
         invoice.setStatus(InvoiceStatus.UNPAID);
-        invoice.setCreatedAt(java.time.LocalDateTime.now());
 
         return invoiceRepository.save(invoice);
     }
 
+    /**
+     * Retrieves all invoices associated with a given business user.
+     *
+     * @param businessUser The business user whose invoices to retrieve
+     * @return List of invoices
+     * @since 1.0
+     */
+    public List<Invoice> getInvoicesForUser(User businessUser) {
+        return invoiceRepository.findByBusinessUser(businessUser);
+    }
+
+    /**
+     * Marks an unpaid invoice as PAID.
+     *
+     * @param invoiceId    The invoice ID to pay
+     * @param businessUser The user paying the invoice
+     * @return true if payment was successful, false otherwise
+     * @since 1.0
+     */
+    @Transactional
+    public boolean payInvoice(Long invoiceId, User businessUser) {
+        Optional<Invoice> optionalInvoice = invoiceRepository.findById(invoiceId);
+
+        if (!optionalInvoice.isPresent()) {
+            return false;
+        }
+
+        Invoice invoice = optionalInvoice.get();
+
+        if (!invoice.getBusinessUser().getId().equals(businessUser.getId()) ||
+                invoice.getStatus() != InvoiceStatus.UNPAID) {
+            return false;
+        }
+
+        invoice.setStatus(InvoiceStatus.PAID);
+        invoiceRepository.save(invoice);
+        return true;
+    }
+
+    /**
+     * Cancels an unpaid invoice by marking its status as CANCELLED.
+     * This method avoids deleting invoices for auditing purposes.
+     *
+     * @param invoiceId    The invoice ID to cancel
+     * @param businessUser The user requesting cancellation
+     * @return true if cancellation was successful, false otherwise
+     * @since 1.0
+     */
+    @Transactional
+    public boolean cancelInvoice(Long invoiceId, User businessUser) {
+        Optional<Invoice> optionalInvoice = invoiceRepository.findById(invoiceId);
+
+        if (!optionalInvoice.isPresent()) {
+            return false;
+        }
+
+        Invoice invoice = optionalInvoice.get();
+
+        if (!invoice.getBusinessUser().getId().equals(businessUser.getId()) ||
+                invoice.getStatus() != InvoiceStatus.UNPAID) {
+            return false;
+        }
+
+        // Set status to CANCELLED instead of deleting to keep record
+        invoice.setStatus(InvoiceStatus.CANCELLED);
+        invoiceRepository.save(invoice);
+        return true;
+    }
 }

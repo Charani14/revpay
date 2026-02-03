@@ -52,6 +52,7 @@ public class User {
 
     @Column(columnDefinition = "TEXT")
     private String verificationDocuments;
+    private boolean businessVerified;
 
     // Relationships
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
@@ -270,4 +271,11 @@ public class User {
 
     // Getters and Setters (generate via IDE)
 
+    public boolean isBusinessVerified() {
+        return businessVerified;
+    }
+
+    public void setBusinessVerified(boolean businessVerified) {
+        this.businessVerified = businessVerified;
+    }
 }

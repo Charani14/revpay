@@ -1,9 +1,12 @@
 package com.revpay.service;
 
+import com.revpay.consoleui.Main;
 import com.revpay.entity.Notification;
 import com.revpay.entity.User;
 import com.revpay.entity.enums.NotificationType;
 import com.revpay.repository.NotificationRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +20,7 @@ public class NotificationService {
     private NotificationRepository notificationRepository;
 
     private static final String PREF_SEPARATOR = ",";
+    private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     // Fetch all or only unread notifications for a user, ordered newest first
     public List<Notification> getUserNotifications(User user, boolean onlyUnread) {
@@ -27,11 +31,12 @@ public class NotificationService {
     }
 
     // Mark a notification as read by id for the user
-    public void markAsRead(Long notificationId, User user) {
+    public void markAsRead(Long notificationId, User currentUser) {
         Notification notification = notificationRepository.findById(notificationId)
                 .orElseThrow(() -> new RuntimeException("Notification not found"));
 
-        if (!notification.getUser().equals(user)) {
+        // ✅ FIX: compare by user ID
+        if (!notification.getUser().getId().equals(currentUser.getId())) {
             throw new RuntimeException("Unauthorized access");
         }
 
@@ -39,18 +44,21 @@ public class NotificationService {
         notificationRepository.save(notification);
     }
 
+
     // Mark a notification as unread by id for the user
-    public void markAsUnread(Long notificationId, User user) {
+    public void markAsUnread(Long notificationId, User currentUser) {
         Notification notification = notificationRepository.findById(notificationId)
                 .orElseThrow(() -> new RuntimeException("Notification not found"));
 
-        if (!notification.getUser().equals(user)) {
+        // ✅ Ownership check
+        if (!notification.getUser().getId().equals(currentUser.getId())) {
             throw new RuntimeException("Unauthorized access");
         }
 
         notification.setReadStatus(false);
         notificationRepository.save(notification);
     }
+
 
     // Send a notification to user (no preference check)
 
@@ -120,4 +128,29 @@ public class NotificationService {
         prefNotification.setReadStatus(true); // mark read to distinguish from real notifications
         notificationRepository.save(prefNotification);
     }
+    public void send2FACode(User user, String code) {
+
+        if (user.getEmail() != null && !user.getEmail().isEmpty()) {
+            sendEmail(
+                    user.getEmail(),
+                    "RevPay Login Verification",
+                    "Your RevPay 2FA code is: " + code
+            );
+        } else if (user.getPhone() != null && !user.getPhone().isEmpty()) {
+            sendSms(
+                    user.getPhone(),
+                    "Your RevPay 2FA code is: " + code
+            );
+        }
+    }
+
+    private void sendEmail(String to, String subject, String body) {
+        log.info("📧 EMAIL to {} | {} | {}", to, subject, body);
+    }
+
+    private void sendSms(String phone, String message) {
+        log.info("📱 SMS to {} | {}", phone, message);
+    }
+
+
 }

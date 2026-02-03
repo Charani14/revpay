@@ -1,5 +1,6 @@
 package com.revpay.consoleui;
 
+import com.revpay.entity.Invoice;
 import com.revpay.entity.Transaction;
 import com.revpay.entity.User;
 import com.revpay.entity.enums.AccountType;
@@ -97,6 +98,8 @@ public class Main {
             user.setEmail(consoleapp.readLine("Email: "));
             user.setPhone(consoleapp.readLine("Phone: "));
             user.setPasswordHash(consoleapp.readLine("Password: "));
+
+            // Transaction PIN
             while (true) {
                 String pin = consoleapp.readLine("Set Transaction PIN (4 digits): ");
                 if (pin.matches("\\d{4}")) {
@@ -107,31 +110,60 @@ public class Main {
                 }
             }
 
-            AccountType accountType = null;
+            // Account type
+            AccountType accountType;
             while (true) {
-                String accTypeInput = consoleapp.readLine("Account Type (PERSONAL/BUSINESS): ").toUpperCase();
                 try {
-                    accountType = AccountType.valueOf(accTypeInput);
+                    accountType = AccountType.valueOf(
+                            consoleapp.readLine("Account Type (PERSONAL/BUSINESS): ").toUpperCase()
+                    );
                     break;
                 } catch (IllegalArgumentException e) {
-                    consoleapp.displayError("Invalid account type. Please enter PERSONAL or BUSINESS.");
+                    consoleapp.displayError("Invalid account type. Enter PERSONAL or BUSINESS.");
                 }
             }
 
             user.setAccountType(accountType);
 
-            // If BUSINESS account, ask business-specific details
+            // ================= BUSINESS REGISTRATION =================
             if (accountType == AccountType.BUSINESS) {
+
                 user.setBusinessName(consoleapp.readLine("Business Name: "));
                 user.setBusinessType(consoleapp.readLine("Business Type: "));
                 user.setTaxId(consoleapp.readLine("Tax ID: "));
                 user.setAddress(consoleapp.readLine("Business Address: "));
-                user.setVerificationDocuments(consoleapp.readLine("Verification Documents (description or path): "));
+
+                int docCount = consoleapp.readInt(
+                        "How many verification documents do you want to upload? ");
+
+                for (int i = 1; i <= docCount; i++) {
+                    String docPath = consoleapp.readLine(
+                            "Enter document " + i + " path/description: ");
+                    userService.uploadDocument(user, docPath);
+                }
+
+                // ✅ VERIFY DOCUMENTS
+                boolean verified = userService.verifyDocuments(user);
+
+                if (!verified) {
+                    consoleapp.displayError(
+                            "Business verification failed. Minimum 2 documents required.");
+                    log.warn("Business registration failed: {}", user.getEmail());
+                    return; // ❌ STOP REGISTRATION
+                }
+
+                user.setBusinessVerified(true);
+                userService.register(user);
+
+                consoleapp.displayMessage(
+                        "Business registered successfully and verified!");
+                log.info("Verified business registered: {}", user.getEmail());
+                return;
             }
 
-
+            // ================= PERSONAL REGISTRATION =================
             userService.register(user);
-            consoleapp.displayMessage("Registration successful!");
+            consoleapp.displayMessage("Personal account registered successfully!");
             log.info("User registered: {}", user.getEmail());
 
         } catch (Exception e) {
@@ -141,23 +173,58 @@ public class Main {
     }
 
 
+
     private User login() {
         try {
             String id = consoleapp.readLine("Email or Phone: ");
+
+            // Ask user if they want to enter password or recover password
+            String option = consoleapp.readLine("Enter 'P' to enter Password or 'F' for Forgot Password: ").trim().toUpperCase();
+
+            if ("F".equals(option)) {
+                // Call password recovery method
+                consoleapp.passwordRecoveryMenu(id);
+                return null;  // After recovery, user can try to login again
+            }
+
+            if (!"P".equals(option)) {
+                consoleapp.displayError("Invalid option. Please try logging in again.");
+                return null;
+            }
+
+            // Normal login flow with password and 2FA
             String pwd = consoleapp.readLine("Password: ");
             User user = securityService.login(id, pwd);
-            consoleapp.displayMessage("Login successful!");
-            return user;
-        } catch (UserNotFoundException | InvalidCredentialsException e) {
-            consoleapp.displayError("Login failed: " + e.getMessage());
-            log.warn("Login failed", e);
-            return null;
+
+            // After successful login, initiate 2FA
+            String code = securityService.generate2FACode(user);
+            consoleapp.displayMessage("Your 2FA code is: " + code + " (Simulated sending)");
+            notificationService.send2FACode(user, code);
+            consoleapp.displayMessage("2FA code sent to your registered email/phone.");
+
+
+            // Prompt user to enter 2FA code (3 attempts)
+            for (int attempts = 1; attempts <= 3; attempts++) {
+                String inputCode = consoleapp.readLine("Enter 2FA code: ");
+                if (securityService.verify2FACode(user, inputCode)) {
+                    consoleapp.displayMessage("2FA verification successful. Logged in.");
+                    return user; // login success
+                } else {
+                    consoleapp.displayError("Incorrect 2FA code. Attempts left: " + (3 - attempts));
+                }
+            }
+
+            consoleapp.displayError("Failed 2FA verification. Login aborted.");
+            return null; // 2FA failed, login aborted
+
         } catch (Exception e) {
-            log.error("Unexpected error during login", e);
-            consoleapp.displayError("An unexpected error occurred during login. Please try again.");
+            log.error("Error during login", e);
+            consoleapp.displayError("Login failed: " + e.getMessage());
             return null;
         }
     }
+
+
 
     private void personalMenu(User user) {
         while (true) {
@@ -274,7 +341,7 @@ public class Main {
                             "3. Request Money\n" +
                             "4. Manage Money Requests\n" +  // <-- Added here
                             "5. Apply Loan\n" +
-                            "6. Create Invoice\n" +
+                            "6. Invoice management\n" +
                             "7. Withdraw Money\n" +
                             "8. Manage Payment Methods\n" +
                             "9. Transaction History\n" +
@@ -344,16 +411,9 @@ public class Main {
 
                 case 6:
                     if (!verifyTransactionPin(user)) break;
-                    try {
-                        Long txId = Long.parseLong(consoleapp.readLine("Transaction ID: "));
-                        invoiceService.createInvoice(txId);
-                        notificationService.notifyUser(user,"Invoice created");
-                        consoleapp.displayMessage("Invoice created successfully.");
-                    } catch (Exception e) {
-                        log.error("Failed to create invoice", e);
-                        consoleapp.displayError("Failed to create invoice. Please try again.");
-                    }
+                    consoleapp.invoiceMenu(user);
                     break;
+
                 case 7: // ✅ Withdraw Money
                     if (!verifyTransactionPin(user)) break;
                     try {
