@@ -38,7 +38,6 @@ public class Transaction {
     @PrePersist
     public void prePersist() {
         createdAt = LocalDateTime.now();
-        status = TransactionStatus.PENDING;
     }
 
     @PreUpdate

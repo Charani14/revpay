@@ -28,25 +28,28 @@ public class TransactionService {
         this.userRepository = userRepository;
     }
 
-    /**
-     * Send money to a user identified by email or phone.
-     * @param sender the user sending money
-     * @param receiverIdentifier email or phone of the receiver
-     * @param amount amount to send
-     * @return saved Transaction
-     */
+    /* ---------------------------------------------------
+       SEND MONEY
+    --------------------------------------------------- */
     public Transaction sendMoney(User sender, String receiverIdentifier, double amount) {
+
+        if (amount <= 0) {
+            throw new RuntimeException("Invalid amount");
+        }
+
         if (sender.getWalletBalance() < amount) {
             throw new RuntimeException("Insufficient balance");
         }
 
-        Optional<User> receiverOpt = findUserByEmailOrPhone(receiverIdentifier);
-        if (!receiverOpt.isPresent()) {  // <-- change here for Java 8 compatibility
-            throw new RuntimeException("Receiver user not found with email or phone: " + receiverIdentifier);
+        User receiver = findUserByEmailOrPhone(receiverIdentifier)
+                .orElseThrow(() ->
+                        new RuntimeException("Receiver not found"));
+
+        if (sender.getId().equals(receiver.getId())) {
+            throw new RuntimeException("Cannot send money to yourself");
         }
 
-        User receiver = receiverOpt.get();
-
+        // Wallet update
         sender.setWalletBalance(sender.getWalletBalance() - amount);
         receiver.setWalletBalance(receiver.getWalletBalance() + amount);
 
@@ -58,44 +61,33 @@ public class TransactionService {
         tx.setReceiver(receiver);
         tx.setAmount(amount);
         tx.setTransactionType(TransactionType.SEND);
-        // Remove TransactionStatus if not used; else keep it here.
         tx.setStatus(TransactionStatus.COMPLETED);
 
         return transactionRepository.save(tx);
     }
 
-    private Optional<User> findUserByEmailOrPhone(String identifier) {
-        // First try email
-        Optional<User> userOpt = userRepository.findByEmail(identifier);
-        if (userOpt.isPresent()) {
-            return userOpt;
-        }
-        // Then try phone
-        return userRepository.findByPhone(identifier);
-    }
+    /* ---------------------------------------------------
+       REQUEST MONEY
+    --------------------------------------------------- */
+    public Transaction requestMoney(User requester,
+                                    String payerIdentifier,
+                                    double amount) {
 
-    public Transaction requestMoney(User requester, String payerIdOrEmailOrPhone, double amount) {
-        User payer = null;
-
-        Optional<User> userByEmail = userRepository.findByEmail(payerIdOrEmailOrPhone);
-        if (userByEmail.isPresent()) {
-            payer = userByEmail.get();
-        } else {
-            Optional<User> userByPhone = userRepository.findByPhone(payerIdOrEmailOrPhone);
-            if (userByPhone.isPresent()) {
-                payer = userByPhone.get();
-            }
+        if (amount <= 0) {
+            throw new RuntimeException("Invalid amount");
         }
 
-        if (payer == null) {
-            throw new RuntimeException("User to request money from not found");
+        User payer = findUserByEmailOrPhone(payerIdentifier)
+                .orElseThrow(() ->
+                        new RuntimeException("User not found"));
+
+        if (requester.getId().equals(payer.getId())) {
+            throw new RuntimeException("Cannot request money from yourself");
         }
-
-
 
         Transaction requestTx = new Transaction();
-        requestTx.setSender(requester); // requester initiates the request
-        requestTx.setReceiver(payer);   // payer is requested to pay
+        requestTx.setSender(requester);   // requester
+        requestTx.setReceiver(payer);     // payer
         requestTx.setAmount(amount);
         requestTx.setTransactionType(TransactionType.REQUEST);
         requestTx.setStatus(TransactionStatus.PENDING);
@@ -103,45 +95,56 @@ public class TransactionService {
         return transactionRepository.save(requestTx);
     }
 
+    /* ---------------------------------------------------
+       ACCEPT REQUEST
+    --------------------------------------------------- */
     public Transaction acceptRequest(Long requestId, User payer) {
+
         Transaction requestTx = transactionRepository.findById(requestId)
-                .orElseThrow(() -> new RuntimeException("Request not found"));
+                .orElseThrow(() ->
+                        new RuntimeException("Request not found"));
 
         if (!requestTx.getReceiver().getId().equals(payer.getId())) {
             throw new RuntimeException("Unauthorized action");
         }
+
         if (requestTx.getStatus() != TransactionStatus.PENDING) {
             throw new RuntimeException("Request already processed");
         }
+
         double amount = requestTx.getAmount();
+
         if (payer.getWalletBalance() < amount) {
-            throw new RuntimeException("Insufficient balance to accept request");
+            throw new RuntimeException("Insufficient balance");
         }
 
         User requester = requestTx.getSender();
 
-        // Deduct from payer
         payer.setWalletBalance(payer.getWalletBalance() - amount);
-        // Add to requester
         requester.setWalletBalance(requester.getWalletBalance() + amount);
 
         userRepository.save(payer);
         userRepository.save(requester);
 
-        // Update transaction status and type to SEND
         requestTx.setStatus(TransactionStatus.COMPLETED);
         requestTx.setTransactionType(TransactionType.SEND);
 
         return transactionRepository.save(requestTx);
     }
 
+    /* ---------------------------------------------------
+       DECLINE REQUEST
+    --------------------------------------------------- */
     public Transaction declineRequest(Long requestId, User payer) {
+
         Transaction requestTx = transactionRepository.findById(requestId)
-                .orElseThrow(() -> new RuntimeException("Request not found"));
+                .orElseThrow(() ->
+                        new RuntimeException("Request not found"));
 
         if (!requestTx.getReceiver().getId().equals(payer.getId())) {
             throw new RuntimeException("Unauthorized action");
         }
+
         if (requestTx.getStatus() != TransactionStatus.PENDING) {
             throw new RuntimeException("Request already processed");
         }
@@ -149,15 +152,24 @@ public class TransactionService {
         requestTx.setStatus(TransactionStatus.DECLINED);
         return transactionRepository.save(requestTx);
     }
+
+    /* ---------------------------------------------------
+       PENDING REQUESTS
+    --------------------------------------------------- */
     public List<Transaction> getPendingRequestsForUser(User user) {
-        return transactionRepository.findByReceiverAndTransactionTypeAndStatus(
-                user,
-                TransactionType.REQUEST,
-                TransactionStatus.PENDING
-        );
+        return transactionRepository
+                .findByReceiverAndTransactionTypeAndStatus(
+                        user,
+                        TransactionType.REQUEST,
+                        TransactionStatus.PENDING
+                );
     }
 
+    /* ---------------------------------------------------
+       WITHDRAW MONEY
+    --------------------------------------------------- */
     public Transaction withdrawMoney(User user, double amount) {
+
         if (amount <= 0) {
             throw new RuntimeException("Invalid withdrawal amount");
         }
@@ -178,6 +190,9 @@ public class TransactionService {
         return transactionRepository.save(tx);
     }
 
+    /* ---------------------------------------------------
+       TRANSACTION HISTORY
+    --------------------------------------------------- */
     public List<Transaction> getTransactionHistory(
             User user,
             LocalDate fromDate,
@@ -186,25 +201,31 @@ public class TransactionService {
             TransactionStatus status,
             String search
     ) {
-        return transactionRepository
-                .findBySenderOrReceiver(user, user)
+
+        return transactionRepository.findBySenderOrReceiver(user, user)
                 .stream()
                 .filter(tx -> fromDate == null ||
                         !tx.getCreatedAt().toLocalDate().isBefore(fromDate))
                 .filter(tx -> toDate == null ||
                         !tx.getCreatedAt().toLocalDate().isAfter(toDate))
-                .filter(tx -> type == null || tx.getTransactionType() == type)
-                .filter(tx -> status == null || tx.getStatus() == status)
+                .filter(tx -> type == null ||
+                        tx.getTransactionType() == type)
+                .filter(tx -> status == null ||
+                        tx.getStatus() == status)
                 .filter(tx -> search == null ||
                         (tx.getNote() != null &&
                                 tx.getNote().toLowerCase().contains(search.toLowerCase())))
                 .sorted(Comparator.comparing(Transaction::getCreatedAt).reversed())
                 .collect(Collectors.toList());
     }
+
+    /* ---------------------------------------------------
+       EXPORT HISTORY
+    --------------------------------------------------- */
     public void exportTransactionHistory(
             List<Transaction> transactions,
-            String filePath
-    ) {
+            String filePath) {
+
         try (PrintWriter writer = new PrintWriter(new File(filePath))) {
 
             writer.println("ID,TYPE,STATUS,AMOUNT,SENDER,RECEIVER,DATE,NOTE");
@@ -227,7 +248,15 @@ public class TransactionService {
         }
     }
 
+    /* ---------------------------------------------------
+       COMMON USER FINDER
+    --------------------------------------------------- */
+    private Optional<User> findUserByEmailOrPhone(String identifier) {
 
+        Optional<User> userByEmail = userRepository.findByEmail(identifier);
+        if (userByEmail.isPresent()) {
+            return userByEmail;
+        }
+        return userRepository.findByPhone(identifier);
+    }
 }
-
-

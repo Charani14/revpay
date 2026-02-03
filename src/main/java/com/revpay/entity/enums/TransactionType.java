@@ -4,5 +4,6 @@ public enum TransactionType {
     SEND,
     REQUEST,
     ADD_FUNDS,
-    WITHDRAW
+    WITHDRAW,
+    RECIEVE
 }
